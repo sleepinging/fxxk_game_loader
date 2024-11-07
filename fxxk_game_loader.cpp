@@ -13,6 +13,7 @@
 
 #include <iostream>
 #include <map>
+#include <vector>
 
 // 以下部分函数从其他地方复制过来的，懒得改了，反正功能可以实现就行了
 
@@ -28,7 +29,9 @@ bool kill(HANDLE h) noexcept {
         std::cerr << "TerminateProcess(), #" << ec << std::endl;
         return false;
     }
-    return true;
+    // 等待退出
+    auto result = WaitForSingleObject(h, 5000);
+    return result == WAIT_OBJECT_0;
 }
 
 
@@ -70,14 +73,22 @@ std::map<uint32_t, Info> getProcessInfoMap() noexcept {
     return process_info_map;
 }
 
-CHandle openProcess(std::wstring_view name) noexcept {
+std::vector<CHandle> openProcess(std::wstring_view name) noexcept {
+    std::vector<CHandle> handlers;
     auto process_info_map = getProcessInfoMap();
     for (auto& [pid, info] : process_info_map) {
-        if (info.file == name) {
-            return CHandle(::OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, info.pid));
+        if (info.file != name) {
+            continue;
         }
+        auto handle = ::OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, info.pid);
+        if (!handle) {
+            int ec = GetLastError();
+            std::cerr << "OpenProcess(), #" << ec << std::endl;
+            continue;
+        }
+        handlers.emplace_back(handle);
     }
-    return CHandle();
+    return handlers;
 }
 
 int main()
@@ -91,11 +102,11 @@ int main()
 
     while (true)
     {
-        auto wegame = openProcess(L"wegame.exe");
-        if (wegame) {
+        auto wegames = openProcess(L"wegame.exe");
+        if (!wegames.empty()) {
             // 等待wegame退出
-            std::wcout << L"已找到wegame进程, 等待退出" << std::endl;
-            auto result = WaitForSingleObject(wegame, INFINITE);
+            std::cout << "已找到wegame进程, 等待退出" << std::endl;
+            auto result = WaitForSingleObject(wegames[0], INFINITE);
             if (result != WAIT_OBJECT_0) {
                 int ec = GetLastError();
                 std::cerr << "WaitForSingleObject(), #" << ec << std::endl;
@@ -105,15 +116,13 @@ int main()
 
 
         // 到GameLoader进程, 可能是多个
-        while (true) {
-            auto game_loader = openProcess(L"GameLoader.exe");
-            if (!game_loader) {
-                break;
-            }
-            std::wcout << L"已找到GameLoader进程, 准备关闭" << std::endl;
+        auto game_loaders = openProcess(L"GameLoader.exe");
+        for (auto& game_loader : game_loaders) {
+            std::cout << "已找到GameLoader进程, 准备关闭" << std::endl;
             if (!kill(game_loader)) {
-                break;
+                continue;
             }
+            std::cout << "已关闭" << std::endl;
         }
         Sleep(3000);
     }
